@@ -63,7 +63,8 @@
   .pl.dead{opacity:.45;text-decoration:line-through}
   .pl .nm{font-size:14.5px}
   .pl .tag{font-size:11px;color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:1px 8px}
-  .pl .tag.bili{color:#8ee6ff;border-color:rgba(142,230,255,.45);background:rgba(142,230,255,.08)}
+  .pl .tag.uc{color:#ff9e9e;border-color:rgba(255,158,158,.45);background:rgba(255,158,158,.10)}
+.pl .tag.bili{color:#8ee6ff;border-color:rgba(142,230,255,.45);background:rgba(142,230,255,.08)}
   .speeches{display:flex;flex-direction:column;gap:8px;margin:10px 0}
   .sp{border-left:2px solid rgba(142,230,255,.35);padding:2px 0 2px 12px;font-size:14px;line-height:1.7}
   .sp b{color:var(--acc2);font-weight:600;margin-right:6px}
@@ -170,6 +171,8 @@
 
     <h2>投票</h2>
     <div class="row" id="voteRow"><span class="meta">等发言结束再投。</span></div>
+
+    <div class="row hide" id="againRow"></div>
 
     <div class="log" id="log"></div>
   </section>
@@ -311,10 +314,17 @@
     }
 
     var me = S.name;
+    var revealMap = {};
+    (d.reveal || []).forEach(function (r) { revealMap[r.name] = r; });
     $('players').innerHTML = (d.players || []).map(function (p) {
       var cls = 'pl' + (p.name === me ? ' me' : '') + (p.alive ? '' : ' dead');
       var bili = p.bili_name ? '<span class="tag bili">' + esc(p.bili_name) + '</span>' : '';
-      return '<div class="' + cls + '"><span class="nm grow">' + esc(p.name) + '</span>' + bili +
+      var rv = revealMap[p.name];
+      var roleTag = rv
+        ? '<span class="tag' + (rv.role === 'undercover' ? ' uc' : '') + '">' +
+          (rv.role === 'undercover' ? '卧底' : '平民') + ' · ' + esc(rv.word) + '</span>'
+        : '';
+      return '<div class="' + cls + '"><span class="nm grow">' + esc(p.name) + '</span>' + bili + roleTag +
         (p.said ? '<span class="tag">说过</span>' : '') +
         (p.voted ? '<span class="tag">投了</span>' : '') +
         '<span class="tag">' + (p.alive ? '在' : '出局') + '</span></div>';
@@ -323,16 +333,53 @@
     var speaking = d.phase === 'speaking';
     var meAlive = (d.players || []).some(function (p) { return p.name === me && p.alive; });
     var meSaid = (d.players || []).some(function (p) { return p.name === me && p.said; });
-    $('sayBox').classList.toggle('hide', !(speaking && meAlive && !meSaid));
+    var postTalking = d.phase === 'ended' && (d.post_left || 0) > 0;
+    $('sayBox').classList.toggle('hide', !((speaking && meAlive && !meSaid) || postTalking));
+    var sayInput = $('sayInput');
+    if (postTalking) {
+      sayInput.placeholder = '赛后闲话——说点什么，还剩 ' + Math.ceil(d.post_left) + ' 秒';
+    } else {
+      sayInput.placeholder = '这一轮说一句——含糊一点才好玩';
+    }
 
-    $('speeches').innerHTML = (d.last_speeches && d.last_speeches.length)
-      ? d.last_speeches.map(function (s) {
-          return '<div class="sp"><b>' + esc(s.name) + '</b>' + esc(s.text) + '</div>';
-        }).join('')
-      : '<div class="empty">还没人说话。</div>';
+    if (d.phase === 'ended') {
+      var chats = d.chat || [];
+      $('speeches').innerHTML = chats.length
+        ? chats.map(function (s) {
+            return '<div class="sp"><b>' + esc(s.name) + '</b>' + esc(s.text) + '</div>';
+          }).join('')
+        : '<div class="empty">赛后闲话：说说刚才谁最可疑。</div>';
+    } else {
+      $('speeches').innerHTML = (d.last_speeches && d.last_speeches.length)
+        ? d.last_speeches.map(function (s) {
+            return '<div class="sp"><b>' + esc(s.name) + '</b>' + esc(s.text) + '</div>';
+          }).join('')
+        : '<div class="empty">还没人说话。</div>';
+    }
 
     var voting = d.phase === 'voting';
     var row = $('voteRow');
+    var againRow = $('againRow');
+    if (d.phase === 'ended') {
+      againRow.classList.remove('hide');
+      againRow.innerHTML =
+        '<button class="primary" id="btnAgain">再来一局（还是这批人）</button>' +
+        '<button id="btnElsewhere">换一间</button>';
+      $('btnAgain').addEventListener('click', function () {
+        post('/web/again', { room: S.room, player_id: S.pid })
+          .then(function () { toast('开新的一局了'); tick(); })
+          .catch(function (e) { toast(e.message); });
+      });
+      $('btnElsewhere').addEventListener('click', function () {
+        post('/web/leave', { room: S.room, player_id: S.pid })
+          .catch(function () {})
+          .then(function () { backToLobby(); });
+      });
+    } else {
+      againRow.classList.add('hide');
+      againRow.innerHTML = '';
+    }
+
     if (!voting) {
       row.innerHTML = '<span class="meta">' + (d.phase === 'ended' ? '这局结束了。' : '等发言结束再投。') + '</span>';
     } else {

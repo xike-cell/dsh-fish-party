@@ -1,0 +1,30 @@
+node_modules/
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 运行时产物
+*.log
+run_stdout.log
+run_stderr.log
+server/demo_transcript.txt
+_seats*.json
+_seats_test.json
+_plugin_smoke*.mjs
+
+# 系统/编辑器
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# 备份
+*.bak-*
+party_token.txt

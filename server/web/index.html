@@ -63,6 +63,7 @@
   .pl.dead{opacity:.45;text-decoration:line-through}
   .pl .nm{font-size:14.5px}
   .pl .tag{font-size:11px;color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:1px 8px}
+  .pl .tag.bili{color:#8ee6ff;border-color:rgba(142,230,255,.45);background:rgba(142,230,255,.08)}
   .speeches{display:flex;flex-direction:column;gap:8px;margin:10px 0}
   .sp{border-left:2px solid rgba(142,230,255,.35);padding:2px 0 2px 12px;font-size:14px;line-height:1.7}
   .sp b{color:var(--acc2);font-weight:600;margin-right:6px}
@@ -90,9 +91,13 @@
     <div class="card">
       <div class="row">
         <input id="nameInput" type="text" maxlength="20" placeholder="你叫什么（20 字以内）" autocomplete="off">
+      </div>
+      <div class="row" style="margin-top:10px">
+        <input id="uidInput" type="text" maxlength="12" inputmode="numeric" placeholder="你的 B 站 UID（数字）" autocomplete="off">
         <button class="primary" id="btnEnter">进来</button>
       </div>
-      <p class="meta" style="margin:12px 0 0">这个名字会是这局里别人叫你的名字。换个名字等于换了一条鱼。</p>
+      <p class="meta" id="uidHint" style="margin:12px 0 0">进塘要绑 B 站号：填 UID，会替你把昵称查出来挂在这条鱼身上。</p>
+      <p class="meta" style="margin:6px 0 0">这个名字是这局里别人叫你的名字；B 站号是别人在塘外认你的凭据。换了名字等于换了一条鱼。</p>
     </div>
   </section>
 
@@ -180,15 +185,16 @@
 (function () {
   var $ = function (id) { return document.getElementById(id); };
   var LS = 'fishpond.v1';
-  var S = { name: '', room: '', pid: '', pass: '', private: false, last: null, timer: null };
+  var S = { name: '', room: '', pid: '', pass: '', private: false, biliUid: '', biliName: '', last: null, timer: null };
 
   function save() {
-    try { localStorage.setItem(LS, JSON.stringify({ name: S.name, room: S.room, pid: S.pid, pass: S.pass, priv: S.private })); } catch (e) {}
+    try { localStorage.setItem(LS, JSON.stringify({ name: S.name, room: S.room, pid: S.pid, pass: S.pass, priv: S.private, bu: S.biliUid, bn: S.biliName })); } catch (e) {}
   }
   function load() {
     try {
       var d = JSON.parse(localStorage.getItem(LS) || '{}');
       S.name = d.name || ''; S.room = d.room || ''; S.pid = d.pid || ''; S.pass = d.pass || ''; S.private = !!d.priv;
+      S.biliUid = d.bu || ''; S.biliName = d.bn || '';
     } catch (e) {}
   }
   function toast(m) {
@@ -246,7 +252,7 @@
 
   function join(room, pass) {
     if (!S.name) { toast('先填个名字'); return; }
-    var body = { room: room, name: S.name };
+    var body = { room: room, name: S.name, bili_uid: S.biliUid };
     if (pass) body.passcode = pass;
     post('/web/join', body).then(function (d) {
       S.room = room; S.pid = d.player_id; S.private = !!d.private; S.pass = pass || ''; save();
@@ -307,7 +313,8 @@
     var me = S.name;
     $('players').innerHTML = (d.players || []).map(function (p) {
       var cls = 'pl' + (p.name === me ? ' me' : '') + (p.alive ? '' : ' dead');
-      return '<div class="' + cls + '"><span class="nm grow">' + esc(p.name) + '</span>' +
+      var bili = p.bili_name ? '<span class="tag bili">' + esc(p.bili_name) + '</span>' : '';
+      return '<div class="' + cls + '"><span class="nm grow">' + esc(p.name) + '</span>' + bili +
         (p.said ? '<span class="tag">说过</span>' : '') +
         (p.voted ? '<span class="tag">投了</span>' : '') +
         '<span class="tag">' + (p.alive ? '在' : '出局') + '</span></div>';
@@ -350,11 +357,32 @@
   }
 
   // ---- 绑定 ----
+  function bindUid(uid) {
+    return fetch('/web/bili?uid=' + encodeURIComponent(uid), { credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d || d.ok === false) throw new Error((d && d.error) || '查不到这个 UID');
+        S.biliUid = String(d.uid); S.biliName = d.name;
+        save();
+        $('uidHint').textContent = '已绑定 · ' + d.name + '（UID ' + d.uid + '）';
+        return d;
+      });
+  }
+
   $('btnEnter').addEventListener('click', function () {
     var v = $('nameInput').value.trim();
+    var uid = $('uidInput').value.trim();
     if (!v) { toast('先填个名字'); return; }
-    S.name = v; save(); show('view-lobby'); loadPond();
+    if (!uid) { toast('还要填你的 B 站 UID'); $('uidInput').focus(); return; }
+    var btn = $('btnEnter');
+    btn.disabled = true;
+    bindUid(uid).then(function () {
+      S.name = v; save(); show('view-lobby'); loadPond(); toast('已绑定 ' + S.biliName);
+    }).catch(function (e) {
+      toast(e.message); $('uidHint').textContent = e.message;
+    }).then(function () { btn.disabled = false; });
   });
+  $('uidInput').addEventListener('keydown', function (e) { if (e.key === 'Enter') $('btnEnter').click(); });
   $('nameInput').addEventListener('keydown', function (e) { if (e.key === 'Enter') $('btnEnter').click(); });
   $('btnRefresh').addEventListener('click', loadPond);
 
@@ -364,7 +392,7 @@
     var isPrivate = $('newVis').value === 'private';
     var btn = $('btnCreate');
     btn.disabled = true;
-    post('/web/create', { host: S.name, max_players: size, undercover_count: 1, private: isPrivate })
+    post('/web/create', { host: S.name, max_players: size, undercover_count: 1, private: isPrivate, bili_uid: S.biliUid })
       .then(function (d) {
         S.room = d.room; S.pid = d.player_id; S.private = !!d.private; S.pass = d.passcode || ''; save();
         enterRoom();
@@ -378,7 +406,7 @@
     if (!S.name) { toast('先填个名字'); return; }
     var btn = $('btnMatch');
     btn.disabled = true;
-    post('/web/match', { name: S.name }).then(function (d) {
+    post('/web/match', { name: S.name, bili_uid: S.biliUid }).then(function (d) {
       S.room = d.room; S.pid = d.player_id; S.private = false; S.pass = ''; save();
       enterRoom();
       if (!d.matched) toast('没找到开着的房，替你开了一间：' + d.room);

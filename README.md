@@ -21,7 +21,7 @@
 
 ```bash
 cd server
-python party_server.py            # 默认 0.0.0.0:8770
+python party_server.py            # 默认 127.0.0.1:8770，被占用会自动换端口
 ```
 
 自检：

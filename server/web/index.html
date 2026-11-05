@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>鱼塘 · 谁是卧底</title>
+<style>
+  :root{
+    --bg0:#050b18;--bg1:#08152b;--ink:#e8eefc;--dim:#8fa2c4;
+    --line:rgba(140,178,255,.22);--card:rgba(140,178,255,.06);
+    --acc:#6ea8ff;--acc2:#8ee6ff;--ok:#4fd18b;--warn:#ffc76b;--bad:#ff7b7b;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    font-family:-apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;color:var(--ink);
+    background:
+      radial-gradient(1200px 700px at 15% -10%,rgba(110,168,255,.20),transparent 60%),
+      radial-gradient(900px 600px at 90% 110%,rgba(142,230,255,.13),transparent 55%),
+      linear-gradient(180deg,var(--bg1),var(--bg0) 65%);
+    min-height:100%;display:flex;justify-content:center;padding:32px 16px 56px;
+  }
+  main{width:100%;max-width:680px;position:relative;z-index:1}
+  h1{font-size:26px;margin:0 0 6px;font-weight:650;letter-spacing:.4px}
+  .sub{color:var(--dim);font-size:13.5px;line-height:1.7;margin:0 0 22px}
+  .hide{display:none!important}
+  .card{border:1px solid var(--line);border-radius:14px;background:var(--card);padding:16px 16px}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  input[type=text]{
+    flex:1 1 200px;min-width:0;font:inherit;font-size:15px;padding:11px 13px;border-radius:10px;
+    border:1px solid var(--line);background:rgba(127,127,127,.08);color:inherit;
+  }
+  input[type=text]:focus{outline:2px solid rgba(110,168,255,.5);outline-offset:1px}
+  button{font:inherit;font-size:14px;padding:10px 18px;border-radius:10px;border:1px solid var(--line);
+    background:rgba(127,127,127,.10);color:inherit;cursor:pointer;transition:background .15s}
+  button:hover:not(:disabled){background:rgba(127,127,127,.2)}
+  button:disabled{opacity:.45;cursor:default}
+  button.primary{border-color:rgba(110,168,255,.55);background:rgba(110,168,255,.18)}
+  button.danger{border-color:rgba(255,123,123,.5);background:rgba(255,123,123,.12)}
+  .rooms{display:flex;flex-direction:column;gap:10px}
+  .room{display:flex;align-items:center;gap:14px;border:1px solid var(--line);border-radius:12px;
+    background:var(--card);padding:13px 15px}
+  .code{font-family:ui-monospace,Consolas,monospace;font-size:18px;letter-spacing:2px;color:var(--acc2)}
+  .meta{color:var(--dim);font-size:12.5px}
+  .grow{flex:1}
+  .empty{color:var(--dim);font-size:14px;line-height:1.9}
+  .topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;flex-wrap:wrap}
+  .pill{font-size:12.5px;padding:4px 11px;border-radius:999px;border:1px solid var(--line);color:var(--dim)}
+  .pill.on{color:var(--ok);border-color:rgba(79,209,139,.4)}
+  .word{border:1px dashed rgba(142,230,255,.4);border-radius:12px;padding:14px 16px;margin-bottom:14px;
+    background:rgba(142,230,255,.06)}
+  .word .k{font-size:12px;color:var(--dim);letter-spacing:1px}
+  .word .v{font-size:26px;font-weight:650;color:var(--acc2);margin-top:4px;letter-spacing:1px}
+  .players{display:flex;flex-direction:column;gap:8px;margin:12px 0}
+  .pl{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:10px;padding:10px 12px;
+    background:rgba(127,127,127,.04)}
+  .pl.me{border-color:rgba(110,168,255,.5);background:rgba(110,168,255,.10)}
+  .pl.dead{opacity:.45;text-decoration:line-through}
+  .pl .nm{font-size:14.5px}
+  .pl .tag{font-size:11px;color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:1px 8px}
+  .speeches{display:flex;flex-direction:column;gap:8px;margin:10px 0}
+  .sp{border-left:2px solid rgba(142,230,255,.35);padding:2px 0 2px 12px;font-size:14px;line-height:1.7}
+  .sp b{color:var(--acc2);font-weight:600;margin-right:6px}
+  .log{border-top:1px solid var(--line);margin-top:14px;padding-top:12px;color:var(--dim);font-size:12.5px;
+    line-height:1.9;max-height:180px;overflow:auto}
+  .banner{border-radius:10px;padding:11px 14px;font-size:13.5px;line-height:1.7;margin-bottom:12px;
+    border:1px solid rgba(255,199,107,.35);background:rgba(255,199,107,.08);color:var(--warn)}
+  .banner.win{border-color:rgba(79,209,139,.4);background:rgba(79,209,139,.10);color:var(--ok)}
+  h2{font-size:12.5px;font-weight:500;color:var(--dim);margin:22px 0 10px;letter-spacing:1.6px}
+  .toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(10px);
+    background:rgba(10,20,38,.96);border:1px solid var(--line);padding:10px 18px;border-radius:10px;
+    font-size:13px;opacity:0;transition:.2s;pointer-events:none;z-index:9}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  footer{margin-top:32px;color:rgba(143,162,196,.55);font-size:11.5px;display:flex;justify-content:space-between;gap:10px}
+  footer a{color:inherit}
+</style>
+</head>
+<body>
+<main>
+  <h1>🫧 <span id="pondName">鱼塘</span></h1>
+  <p class="sub">打开就能玩。填个名字，挑一间房进去——人齐了就开局。</p>
+
+  <!-- 入口 -->
+  <section id="view-login">
+    <div class="card">
+      <div class="row">
+        <input id="nameInput" type="text" maxlength="20" placeholder="你叫什么（20 字以内）" autocomplete="off">
+        <button class="primary" id="btnEnter">进来</button>
+      </div>
+      <p class="meta" style="margin:12px 0 0">这个名字会是这局里别人叫你的名字。换个名字等于换了一条鱼。</p>
+    </div>
+  </section>
+
+  <!-- 大厅 -->
+  <section id="view-lobby" class="hide">
+    <div class="topbar">
+      <span class="pill on" id="mePill">我</span>
+      <span class="row">
+        <button id="btnRefresh">刷新</button>
+        <button id="btnLeave">换个名字</button>
+      </span>
+    </div>
+    <h2>在等人的房</h2>
+    <div id="rooms" class="rooms"><div class="empty">正在问塘里……</div></div>
+    <p class="meta" style="margin-top:14px">没有房，就等开塘的那只鱼开口。它一开房，这里就会冒出来。</p>
+  </section>
+
+  <!-- 房内 -->
+  <section id="view-room" class="hide">
+    <div class="topbar">
+      <span class="code" id="roomCode">—</span>
+      <span class="row">
+        <span class="pill" id="phasePill">—</span>
+        <button id="btnExit" class="danger">退出这局</button>
+      </span>
+    </div>
+
+    <div id="banner" class="banner hide"></div>
+
+    <div class="word" id="wordBox">
+      <div class="k">你拿到的词（别念出来）</div>
+      <div class="v" id="myWord">—</div>
+    </div>
+
+    <div class="players" id="players"></div>
+
+    <div id="sayBox" class="hide">
+      <div class="row">
+        <input id="sayInput" type="text" maxlength="200" placeholder="这一轮说一句——含糊一点才好玩" autocomplete="off">
+        <button class="primary" id="btnSay">说</button>
+      </div>
+    </div>
+
+    <h2>这一轮的话</h2>
+    <div class="speeches" id="speeches"><div class="empty">还没人说话。</div></div>
+
+    <h2>投票</h2>
+    <div class="row" id="voteRow"><span class="meta">等发言结束再投。</span></div>
+
+    <div class="log" id="log"></div>
+  </section>
+
+  <footer>
+    <span>dsh-fish-party · 0.1.0 测试版</span>
+    <a href="https://github.com/xike-cell/dsh-fish-party" target="_blank" rel="noreferrer">GitHub ↗</a>
+  </footer>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var LS = 'fishpond.v1';
+  var S = { name: '', room: '', pid: '', last: null, timer: null };
+
+  function save() {
+    try { localStorage.setItem(LS, JSON.stringify({ name: S.name, room: S.room, pid: S.pid })); } catch (e) {}
+  }
+  function load() {
+    try {
+      var d = JSON.parse(localStorage.getItem(LS) || '{}');
+      S.name = d.name || ''; S.room = d.room || ''; S.pid = d.pid || '';
+    } catch (e) {}
+  }
+  function toast(m) {
+    var t = $('toast'); t.textContent = m; t.classList.add('show');
+    clearTimeout(t._t); t._t = setTimeout(function () { t.classList.remove('show'); }, 2200);
+  }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function show(which) {
+    ['view-login', 'view-lobby', 'view-room'].forEach(function (v) {
+      $(v).classList.toggle('hide', v !== which);
+    });
+  }
+  function post(url, body) {
+    return fetch(url, {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body || {}),
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (!d || d.ok === false) throw new Error((d && (d.error || d.message)) || '失败了');
+      return d;
+    });
+  }
+
+  function phaseText(p) {
+    return { lobby: '在等人', speaking: '正在说', voting: '投票中', ended: '打完了' }[p] || p || '—';
+  }
+
+  // ---- 大厅 ----
+  function loadPond() {
+    fetch('/pond', { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (d) {
+      if (d && d.host) $('pondName').textContent = d.host + ' 的塘';
+      var rooms = (d && d.rooms) || [];
+      var box = $('rooms');
+      if (!rooms.length) {
+        box.innerHTML = '<div class="empty">塘里现在没有房。</div>';
+        return;
+      }
+      box.innerHTML = rooms.map(function (r) {
+        var full = r.players >= r.max;
+        return '<div class="room"><span class="code">' + esc(r.room) + '</span>' +
+          '<span class="grow meta">' + phaseText(r.phase) + ' · ' + r.players + '/' + r.max + ' 人</span>' +
+          '<button data-join="' + esc(r.room) + '"' + (full || r.phase !== 'lobby' ? ' disabled' : '') + '>进去</button></div>';
+      }).join('');
+      Array.prototype.forEach.call(box.querySelectorAll('button[data-join]'), function (b) {
+        b.addEventListener('click', function () { join(b.getAttribute('data-join')); });
+      });
+    }).catch(function () {
+      $('rooms').innerHTML = '<div class="empty">问不到塘里——服务端可能关掉了。</div>';
+    });
+  }
+
+  function join(room) {
+    if (!S.name) { toast('先填个名字'); return; }
+    post('/web/join', { room: room, name: S.name }).then(function (d) {
+      S.room = room; S.pid = d.player_id; save();
+      enterRoom();
+    }).catch(function (e) { toast(e.message); });
+  }
+
+  // ---- 房内 ----
+  function enterRoom() {
+    show('view-room');
+    $('roomCode').textContent = S.room;
+    tick();
+    clearInterval(S.timer);
+    S.timer = setInterval(tick, 2000);
+  }
+
+  function tick() {
+    if (!S.room || !S.pid) return;
+    post('/web/state', { room: S.room, player_id: S.pid }).then(render).catch(function (e) {
+      if (/不存在|没有这个人|离场/.test(e.message)) { toast('这一局没了'); backToLobby(); }
+    });
+  }
+
+  function render(d) {
+    S.last = d;
+    $('phasePill').textContent = phaseText(d.phase) + (d.round ? ' · 第 ' + d.round + ' 轮' : '');
+    $('phasePill').className = 'pill' + (d.phase === 'ended' ? '' : ' on');
+    $('myWord').textContent = d.your_role_word || '—';
+
+    var banner = $('banner');
+    if (d.phase === 'ended') {
+      var win = d.winner === 'civilian' ? '平民赢了' : (d.winner === 'undercover' ? '卧底赢了' : '打完了');
+      banner.textContent = win + '。房号 ' + S.room + '，可以退出再进别的房。';
+      banner.className = 'banner win';
+    } else if (d.phase === 'lobby') {
+      var n = d.players.length;
+      banner.textContent = '还在等人：' + n + ' 个到了。人齐自动开局。';
+      banner.className = 'banner';
+    } else {
+      banner.className = 'banner hide';
+    }
+
+    var me = S.name;
+    $('players').innerHTML = (d.players || []).map(function (p) {
+      var cls = 'pl' + (p.name === me ? ' me' : '') + (p.alive ? '' : ' dead');
+      return '<div class="' + cls + '"><span class="nm grow">' + esc(p.name) + '</span>' +
+        (p.said ? '<span class="tag">说过</span>' : '') +
+        (p.voted ? '<span class="tag">投了</span>' : '') +
+        '<span class="tag">' + (p.alive ? '在' : '出局') + '</span></div>';
+    }).join('');
+
+    var speaking = d.phase === 'speaking';
+    var meAlive = (d.players || []).some(function (p) { return p.name === me && p.alive; });
+    var meSaid = (d.players || []).some(function (p) { return p.name === me && p.said; });
+    $('sayBox').classList.toggle('hide', !(speaking && meAlive && !meSaid));
+
+    $('speeches').innerHTML = (d.last_speeches && d.last_speeches.length)
+      ? d.last_speeches.map(function (s) {
+          return '<div class="sp"><b>' + esc(s.name) + '</b>' + esc(s.text) + '</div>';
+        }).join('')
+      : '<div class="empty">还没人说话。</div>';
+
+    var voting = d.phase === 'voting';
+    var row = $('voteRow');
+    if (!voting) {
+      row.innerHTML = '<span class="meta">' + (d.phase === 'ended' ? '这局结束了。' : '等发言结束再投。') + '</span>';
+    } else {
+      row.innerHTML = (d.players || []).filter(function (p) { return p.alive && p.name !== me; }).map(function (p) {
+        return '<button data-vote="' + esc(p.name) + '">投 ' + esc(p.name) + '</button>';
+      }).join('') || '<span class="meta">没有可投的人。</span>';
+      Array.prototype.forEach.call(row.querySelectorAll('button[data-vote]'), function (b) {
+        b.addEventListener('click', function () {
+          post('/web/vote', { room: S.room, player_id: S.pid, target: b.getAttribute('data-vote') })
+            .then(function () { toast('票投出去了'); tick(); })
+            .catch(function (e) { toast(e.message); });
+        });
+      });
+    }
+
+    $('log').innerHTML = (d.log || []).slice(-8).map(function (x) { return '<div>' + esc(x) + '</div>'; }).join('');
+  }
+
+  function backToLobby() {
+    clearInterval(S.timer); S.timer = null; S.room = ''; S.pid = ''; save();
+    show('view-lobby'); loadPond();
+  }
+
+  // ---- 绑定 ----
+  $('btnEnter').addEventListener('click', function () {
+    var v = $('nameInput').value.trim();
+    if (!v) { toast('先填个名字'); return; }
+    S.name = v; save(); show('view-lobby'); loadPond();
+  });
+  $('nameInput').addEventListener('keydown', function (e) { if (e.key === 'Enter') $('btnEnter').click(); });
+  $('btnRefresh').addEventListener('click', loadPond);
+  $('btnLeave').addEventListener('click', function () {
+    localStorage.removeItem(LS); S.name = ''; S.room = ''; S.pid = ''; show('view-login');
+  });
+  $('btnExit').addEventListener('click', function () {
+    post('/party/leave', { room: S.room, player_id: S.pid }).catch(function () {});
+    backToLobby();
+  });
+  $('btnSay').addEventListener('click', function () {
+    var t = $('sayInput').value.trim();
+    if (!t) { toast('说点什么'); return; }
+    post('/web/say', { room: S.room, player_id: S.pid, text: t }).then(function () {
+      $('sayInput').value = ''; tick();
+    }).catch(function (e) { toast(e.message); });
+  });
+  $('sayInput').addEventListener('keydown', function (e) { if (e.key === 'Enter') $('btnSay').click(); });
+
+  // ---- 启动 ----
+  load();
+  if (S.name) {
+    $('nameInput').value = S.name;
+    if (S.room && S.pid) enterRoom();
+    else { show('view-lobby'); loadPond(); }
+  } else {
+    show('view-login');
+  }
+})();
+</script>
+</body>
+</html>

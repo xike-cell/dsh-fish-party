@@ -29,6 +29,7 @@ TICK_INTERVAL = 0.5
 # 房间回收：房间只增不减会一直吃内存、拖慢每 0.5 秒的全量扫描。
 LOBBY_TTL = 600.0   # 大厅里没人开局的房间，闲置 10 分钟回收
 ENDED_TTL = 300.0   # 已结束的房间，留 5 分钟给玩家看结果，然后回收
+POST_TALK = 60.0    # 赛后可说话的时长（在这段时间里聊天、不计轮次、不投票）
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_PATH = os.path.join(BASE_DIR, "server.log")
@@ -404,6 +405,9 @@ def _check_winner(room, eliminated):
 def _finish_game(room, winner):
     room["phase"] = "ended"
     room["winner"] = winner
+    room["post_started"] = time.time()
+    room["post_chat"] = []
+    room["phase_started"] = time.time()
     room_event(
         room,
         "游戏结束：%s获胜。" % ("平民" if winner == "civilian" else "卧底"),
@@ -654,10 +658,28 @@ def api_state(data):
         {"name": speech["name"], "text": speech["text"]}
         for speech in room["last_speeches"]
     ]
+    reveal = []
+    if room["phase"] == "ended":
+        reveal = [
+            {
+                "name": item["name"],
+                "role": item["role"],
+                "word": item["word"],
+                "alive": item["alive"],
+                "bili_name": (item.get("bili") or {}).get("name", ""),
+            }
+            for item in room["players"]
+        ]
+    post_left = 0.0
+    if room["phase"] == "ended":
+        post_left = max(0.0, POST_TALK - (time.time() - room.get("post_started", 0)))
     return {
         "phase": room["phase"],
         "round": room["round"],
         "players": players,
+        "reveal": reveal,
+        "post_left": round(post_left, 1),
+        "chat": list(room.get("post_chat") or []),
         "your_role_word": player["word"],
         "last_speeches": speeches,
         "votes": dict(room["votes"]),
@@ -669,6 +691,15 @@ def api_state(data):
 def api_say(data):
     room, player = _room_and_player(data)
     text = str(data.get("text") or "").strip()
+    if room["phase"] == "ended":
+        if not text:
+            raise ApiError("发言不能为空")
+        left = POST_TALK - (time.time() - room.get("post_started", 0))
+        if left <= 0:
+            raise ApiError("赛后闲话已经结束了")
+        room.setdefault("post_chat", []).append({"name": player["name"], "text": text[:200]})
+        room_event(room, "赛后 %s：%s" % (player["name"], text[:200]))
+        return {"ok": True, "phase": "ended"}
     if room["phase"] != "speaking":
         raise ApiError("当前不是发言阶段")
     if not player["alive"]:
@@ -721,6 +752,55 @@ def api_vote(data):
         "eliminated": eliminated,
         "phase": room["phase"],
     }
+
+
+def _restart_room(room):
+    """同一批人原地重开：重新发词、复活所有人、清空这一局的痕迹。"""
+    pair = WORD_PAIRS[_rand_int(len(WORD_PAIRS))]
+    if _rand_bit():
+        uc_word, civ_word = pair[0], pair[1]
+    else:
+        uc_word, civ_word = pair[1], pair[0]
+
+    players = room["players"]
+    total = len(players)
+    uc = int(room.get("undercover_count") or 1)
+    if uc >= total:
+        uc = max(1, total - 1)
+    role_plan = ["undercover"] * uc + ["civilian"] * (total - uc)
+    role_plan = sorted(role_plan, key=lambda _: uuid.uuid4().int)
+    for index, player in enumerate(players):
+        player["role"] = role_plan[index]
+        player["word"] = uc_word if role_plan[index] == "undercover" else civ_word
+        player["alive"] = True
+        player["said"] = False
+        player["voted"] = None
+
+    room["pair"] = pair
+    room["uc_word"] = uc_word
+    room["civ_word"] = civ_word
+    room["undercover_count"] = uc
+    room["role_plan"] = role_plan
+    room["phase"] = "lobby"
+    room["round"] = 0
+    room["phase_started"] = time.time()
+    room["last_speeches"] = []
+    room["votes"] = {}
+    room["winner"] = None
+    room["log"] = []
+    room.pop("post_started", None)
+    room["post_chat"] = []
+    room_event(room, "重开一局，还是这批人。")
+    _maybe_start(room)
+
+
+def api_again(data):
+    room, player = _room_and_player(data)
+    if room["phase"] != "ended":
+        raise ApiError("这一局还没打完")
+    # 谁点都能开：重开只是把同一批人复活重来，没有权限风险。
+    _restart_room(room)
+    return {"ok": True, "phase": room["phase"], "round": room["round"]}
 
 
 def api_leave(data):
@@ -879,6 +959,7 @@ class Handler(BaseHTTPRequestHandler):
             "/party/say": api_say,
             "/party/vote": api_vote,
             "/party/leave": api_leave,
+            "/party/again": api_again,
             # 网页版：不校验口令，只放行进屋看局/说话/投票（房号本身就是一局一码）
             # 开房也放行，但吃的是建房限流（每 IP 每 10 分钟 20 间），防止被刷
             "/web/leave": api_leave,
@@ -888,6 +969,7 @@ class Handler(BaseHTTPRequestHandler):
             "/web/state": api_state,
             "/web/say": api_say,
             "/web/vote": api_vote,
+            "/web/again": api_again,
         }
         handler = routes.get(path)
         if handler is None:

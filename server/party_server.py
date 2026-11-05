@@ -318,7 +318,7 @@ def pond_info():
     rooms = []
     now = time.time()
     for code, room in list(ROOMS.items()):
-        if room["phase"] == "ended":
+        if room["phase"] == "ended" or room.get("private"):
             continue
         rooms.append({
             "room": code,
@@ -370,11 +370,20 @@ def api_create(data):
     word = uc_word if role == "undercover" else civ_word
     host_player = _make_player(pid, host, role, word, 0)
 
+    is_private = bool(data.get("private"))
+    passcode = str(data.get("passcode") or "").strip()[:8]
+    if is_private and not passcode:
+        passcode = "%04d" % (_rand_int(10000),)
+    if not is_private:
+        passcode = ""
+
     room = {
         "room": code,
         "host": host,
         "max_players": max_players,
         "undercover_count": undercover_count,
+        "private": is_private,
+        "passcode": passcode,
         "phase": "lobby",
         "round": 0,
         "phase_started": time.time(),
@@ -391,7 +400,7 @@ def api_create(data):
     ROOMS[code] = room
     room_event(room, "房间创建，房主 %s 已加入。" % host)
     _maybe_start(room)
-    return {"room": code, "player_id": pid, "role": role, "word": word}
+    return {"room": code, "player_id": pid, "role": role, "word": word, "private": is_private, "passcode": passcode}
 
 
 def api_join(data):
@@ -404,6 +413,10 @@ def api_join(data):
         raise ApiError("name 不能为空")
     if len(name) > 20:
         raise ApiError("玩家名过长")
+    if room.get("private"):
+        given = str(data.get("passcode") or "").strip()
+        if given != room.get("passcode", ""):
+            raise ApiError("这是私人房，要口令才能进", 403)
     if room["phase"] != "lobby":
         raise ApiError("游戏已经开始，无法加入")
     if len(room["players"]) >= room["max_players"]:
@@ -421,6 +434,51 @@ def api_join(data):
     room_event(room, "%s 已加入房间。" % name)
     _maybe_start(room)
     return {"player_id": pid, "role": role, "word": word}
+
+
+def api_match(data):
+    """随机匹配：找一间还开着、公开的、没满的房坐进去；一间都没有就自己开一间公开房。"""
+    name = str(data.get("name") or "").strip()
+    if not name:
+        raise ApiError("name 不能为空")
+    if len(name) > 20:
+        raise ApiError("玩家名过长")
+    want = data.get("max_players")
+    try:
+        want_n = int(want) if want is not None else 0
+    except (TypeError, ValueError):
+        want_n = 0
+
+    now = time.time()
+    candidates = []
+    for code, room in list(ROOMS.items()):
+        if room["phase"] != "lobby" or room.get("private"):
+            continue
+        if len(room["players"]) >= room["max_players"]:
+            continue
+        if any(p["name"] == name for p in room["players"]):
+            continue
+        candidates.append((now - room["phase_started"], code, room))
+
+    # 等人等得越久越优先，其次是人数更接近满的
+    candidates.sort(key=lambda x: (-x[0], -len(x[2]["players"])))
+    for _, code, room in candidates:
+        try:
+            res = api_join({"room": code, "name": name})
+            res["matched"] = True
+            res["room"] = code
+            return res
+        except ApiError:
+            continue
+
+    res = api_create({
+        "host": name,
+        "max_players": want_n if 2 <= want_n <= 10 else 4,
+        "undercover_count": 1,
+        "private": False,
+    })
+    res["matched"] = False
+    return res
 
 
 def api_state(data):
@@ -652,6 +710,10 @@ class Handler(BaseHTTPRequestHandler):
             "/party/vote": api_vote,
             "/party/leave": api_leave,
             # 网页版：不校验口令，只放行进屋看局/说话/投票（房号本身就是一局一码）
+            # 开房也放行，但吃的是建房限流（每 IP 每 10 分钟 20 间），防止被刷
+            "/web/leave": api_leave,
+            "/web/create": api_create,
+            "/web/match": api_match,
             "/web/join": api_join,
             "/web/state": api_state,
             "/web/say": api_say,

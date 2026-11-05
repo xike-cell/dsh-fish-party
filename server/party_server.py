@@ -31,6 +31,18 @@ ENDED_TTL = 300.0   # 已结束的房间，留 5 分钟给玩家看结果，然�
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_PATH = os.path.join(BASE_DIR, "server.log")
+WEB_DIR = os.path.join(BASE_DIR, "web")
+
+# 塘主名：网页顶上那个名字。用环境变量 FISH_PARTY_OWNER 覆盖。
+POND_OWNER = (os.environ.get("FISH_PARTY_OWNER") or "汐禾").strip() or "汐禾"
+# 网页版允许「打开就能玩」：/web/* 不校验口令（房号本身就是一局一码），
+# 但只放行 join/state/say/vote，建房仍要口令，防止陌生人刷房。
+WEB_ROUTE_MAP = {
+    "/web/join": "join",
+    "/web/state": "state",
+    "/web/say": "say",
+    "/web/vote": "vote",
+}
 
 # --- 安全 ---
 # 1) 只监听回环地址：外网必须先经隧道，隧道地址不公开。
@@ -299,6 +311,31 @@ def _maybe_start(room):
         "人数已满，游戏开始。第 1 轮发言开始（%d 秒内未发言视为弃权）。"
         % int(SPEAK_TIMEOUT),
     )
+
+
+def pond_info():
+    """网页版用：塘主名 + 还在的房（只给公开信息，不给词、不给口令）。"""
+    rooms = []
+    now = time.time()
+    for code, room in list(ROOMS.items()):
+        if room["phase"] == "ended":
+            continue
+        rooms.append({
+            "room": code,
+            "players": len(room["players"]),
+            "max": room["max_players"],
+            "phase": room["phase"],
+            "round": room["round"],
+            "idle": int(now - room["phase_started"]),
+        })
+    rooms.sort(key=lambda r: (r["phase"] != "lobby", -r["players"]))
+    return {
+        "ok": True,
+        "host": POND_OWNER,
+        "service": "fishparty",
+        "version": "0.1.0",
+        "rooms": rooms,
+    }
 
 
 def api_create(data):
@@ -580,8 +617,30 @@ class Handler(BaseHTTPRequestHandler):
                 {"ok": True, "service": "fishparty", "port": ACTUAL_PORT,
                  "token_required": True},
             )
+        elif path in ("/", "/index.html"):
+            self._send_index()
+        elif path == "/pond":
+            self._send_json(200, pond_info())
         else:
             self._send_json(404, {"ok": False, "error": "未知接口"})
+
+    def _send_index(self):
+        file = os.path.join(WEB_DIR, "index.html")
+        try:
+            with open(file, "rb") as fh:
+                body = fh.read()
+        except OSError:
+            self._send_json(500, {"ok": False, "error": "网页文件没找到：%s" % file})
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def do_POST(self):
         path = self.path.split("?")[0]
@@ -592,6 +651,11 @@ class Handler(BaseHTTPRequestHandler):
             "/party/say": api_say,
             "/party/vote": api_vote,
             "/party/leave": api_leave,
+            # 网页版：不校验口令，只放行进屋看局/说话/投票（房号本身就是一局一码）
+            "/web/join": api_join,
+            "/web/state": api_state,
+            "/web/say": api_say,
+            "/web/vote": api_vote,
         }
         handler = routes.get(path)
         if handler is None:
@@ -601,14 +665,17 @@ class Handler(BaseHTTPRequestHandler):
         if not _rate_ok(ip, _HITS, RATE_LIMIT, RATE_WINDOW):
             self._send_json(429, {"ok": False, "error": "太频繁了，歇一会儿"})
             return
-        if path == "/party/create" and not _rate_ok(ip, _CREATES, CREATE_LIMIT, CREATE_WINDOW):
-            self._send_json(429, {"ok": False, "error": "建房太频繁了"})
-            return
-        got = (self.headers.get("X-Fish-Token") or "").strip()
-        if got != TOKEN:
-            log_line("拒绝未带口令的请求 %s from %s" % (path, ip))
-            self._send_json(401, {"ok": False, "error": "口令不对"})
-            return
+        if path in ("/party/create", "/web/create"):
+            if not _rate_ok(ip, _CREATES, CREATE_LIMIT, CREATE_WINDOW):
+                self._send_json(429, {"ok": False, "error": "建房太频繁了"})
+                return
+        is_web = path.startswith("/web/")
+        if not is_web:
+            got = (self.headers.get("X-Fish-Token") or "").strip()
+            if got != TOKEN:
+                log_line("拒绝未带口令的请求 %s from %s" % (path, ip))
+                self._send_json(401, {"ok": False, "error": "口令不对"})
+                return
         try:
             body = self._read_json()
             with LOCK:

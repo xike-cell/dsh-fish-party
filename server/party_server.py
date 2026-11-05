@@ -13,6 +13,7 @@ import os
 import sys
 import threading
 import time
+import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -35,6 +36,58 @@ WEB_DIR = os.path.join(BASE_DIR, "web")
 
 # 塘主名：网页顶上那个名字。用环境变量 FISH_PARTY_OWNER 覆盖。
 POND_OWNER = (os.environ.get("FISH_PARTY_OWNER") or "汐禾").strip() or "汐禾"
+
+# ── 绑定 B 站号 ─────────────────────────────────────────────────────────────
+# B 站不会把「实名」给第三方，所以这里能证明的只有「这个 UID 存在、昵称能取到」。
+BILI_API = "https://api.bilibili.com/x/web-interface/card?mid=%s"
+BILI_TTL = 600.0
+BILI_CACHE = {}
+BILI_LOCK = threading.Lock()
+
+
+def bili_lookup(uid):
+    """查一个 UID 是否存在，返回 {"uid": int, "name": str}；查不到返回 None。带 10 分钟缓存。"""
+    raw = str(uid or "").strip()
+    if not raw.isdigit():
+        return None
+    key = int(raw)
+    if key <= 0:
+        return None
+    now = time.time()
+    with BILI_LOCK:
+        hit = BILI_CACHE.get(key)
+        if hit and now - hit[0] < BILI_TTL:
+            return hit[1]
+    got = None
+    req = urllib.request.Request(
+        BILI_API % key,
+        headers={"User-Agent": "Mozilla/5.0 (fish-party)", "Referer": "https://www.bilibili.com/"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            payload = json.loads(resp.read().decode("utf-8", "replace"))
+        if payload.get("code") == 0:
+            data = payload.get("data") or {}
+            card = data.get("card") or data
+            name = str(card.get("name") or "").strip()
+            if name:
+                got = {"uid": key, "name": name[:24]}
+    except Exception as exc:  # 网络/解析失败一律当作查不到，不抛给玩家
+        log_line("查 B 站 UID %s 失败：%s" % (key, exc))
+    with BILI_LOCK:
+        BILI_CACHE[key] = (now, got)
+    return got
+
+
+def _bili_bind(data):
+    """进房前必须先有一个能查到的 B 站号。"""
+    raw = str(data.get("bili_uid") or "").strip()
+    if not raw:
+        raise ApiError("要先绑定 B 站号：填一下你的 B 站 UID", 400)
+    got = bili_lookup(raw)
+    if not got:
+        raise ApiError("这个 UID 查不到（或者 B 站暂时没响应），核对一下再试", 400)
+    return got
 # 网页版允许「打开就能玩」：/web/* 不校验口令（房号本身就是一局一码），
 # 但只放行 join/state/say/vote，建房仍要口令，防止陌生人刷房。
 WEB_ROUTE_MAP = {
@@ -252,7 +305,7 @@ def _new_room_code():
             return code
 
 
-def _make_player(pid, name, role, word, index):
+def _make_player(pid, name, role, word, index, bili=None):
     return {
         "id": pid,
         "name": name,
@@ -262,6 +315,7 @@ def _make_player(pid, name, role, word, index):
         "said": False,
         "voted": None,
         "index": index,
+        "bili": bili or {},
     }
 
 
@@ -416,8 +470,11 @@ def pond_info():
     for code, room in list(ROOMS.items()):
         if room["phase"] == "ended" or room.get("private"):
             continue
+        host_bili = (room["players"][0].get("bili") or {}) if room["players"] else {}
         rooms.append({
             "room": code,
+            "host_bili": host_bili.get("name", ""),
+            "host_uid": host_bili.get("uid", 0),
             "players": len(room["players"]),
             "max": room["max_players"],
             "phase": room["phase"],
@@ -440,6 +497,7 @@ def api_create(data):
         raise ApiError("host 不能为空")
     if len(host) > 20:
         raise ApiError("玩家名过长")
+    host_bili = _bili_bind(data)
     try:
         max_players = int(data.get("max_players", 4))
         undercover_count = int(data.get("undercover_count", 1))
@@ -464,7 +522,7 @@ def api_create(data):
     pid = str(uuid.uuid4())
     role = role_plan[0]
     word = uc_word if role == "undercover" else civ_word
-    host_player = _make_player(pid, host, role, word, 0)
+    host_player = _make_player(pid, host, role, word, 0, host_bili)
 
     is_private = bool(data.get("private"))
     passcode = str(data.get("passcode") or "").strip()[:8]
@@ -509,6 +567,7 @@ def api_join(data):
         raise ApiError("name 不能为空")
     if len(name) > 20:
         raise ApiError("玩家名过长")
+    joiner_bili = _bili_bind(data)
     if room.get("private"):
         given = str(data.get("passcode") or "").strip()
         if given != room.get("passcode", ""):
@@ -525,7 +584,7 @@ def api_join(data):
     role = room["role_plan"][index]
     word = room["uc_word"] if role == "undercover" else room["civ_word"]
     pid = str(uuid.uuid4())
-    player = _make_player(pid, name, role, word, index)
+    player = _make_player(pid, name, role, word, index, joiner_bili)
     room["players"].append(player)
     room_event(room, "%s 已加入房间。" % name)
     _maybe_start(room)
@@ -560,7 +619,7 @@ def api_match(data):
     candidates.sort(key=lambda x: (-x[0], -len(x[2]["players"])))
     for _, code, room in candidates:
         try:
-            res = api_join({"room": code, "name": name})
+            res = api_join({"room": code, "name": name, "bili_uid": data.get("bili_uid")})
             res["matched"] = True
             res["room"] = code
             return res
@@ -572,6 +631,7 @@ def api_match(data):
         "max_players": want_n if 2 <= want_n <= 10 else 4,
         "undercover_count": 1,
         "private": False,
+        "bili_uid": data.get("bili_uid"),
     })
     res["matched"] = False
     return res
@@ -585,6 +645,8 @@ def api_state(data):
             "alive": item["alive"],
             "said": item["said"],
             "voted": item["voted"],
+            "bili_name": (item.get("bili") or {}).get("name", ""),
+            "bili_uid": (item.get("bili") or {}).get("uid", 0),
         }
         for item in room["players"]
     ]
@@ -775,6 +837,18 @@ class Handler(BaseHTTPRequestHandler):
             self._send_index()
         elif path == "/pond":
             self._send_json(200, pond_info())
+        elif path == "/web/bili":
+            query = self.path.split("?", 1)[1] if "?" in self.path else ""
+            uid = ""
+            for part in query.split("&"):
+                if part.startswith("uid="):
+                    uid = part[4:]
+                    break
+            got = bili_lookup(uid)
+            if got:
+                self._send_json(200, {"ok": True, "uid": got["uid"], "name": got["name"]})
+            else:
+                self._send_json(404, {"ok": False, "error": "查不到这个 UID"})
         else:
             self._send_json(404, {"ok": False, "error": "未知接口"})
 

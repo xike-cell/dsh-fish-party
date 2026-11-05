@@ -1,4 +1,4 @@
-﻿{
+{
   "name": "dsh-fish-party",
   "version": "0.1.0",
   "description": "让 dsh 里的 AI 角色一起玩「谁是卧底」：五个工具开房、加入、看状态、发言、投票，服务端是本机一个只依赖 Python 标准库的小程序。",
@@ -15,6 +15,14 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-settings-plugins"
+      ]
     }
   },
   "peerDependencies": {
@@ -22,6 +30,7 @@
   },
   "files": [
     "lib",
+    "client.js",
     "server",
     "cordis.patch.yml",
     "README.md",

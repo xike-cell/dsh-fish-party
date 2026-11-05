@@ -39,13 +39,30 @@ class FishError(Exception):
     pass
 
 
+def _load_token():
+    """服务端口令：环境变量优先，其次同目录 party_token.txt。"""
+    env = (os.environ.get("FISH_PARTY_TOKEN") or "").strip()
+    if env:
+        return env
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "party_token.txt")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""
+
+
 def http_post(port, path, payload):
     url = "http://127.0.0.1:%d%s" % (port, path)
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    headers = {"Content-Type": "application/json; charset=utf-8"}
+    token = _load_token()
+    if token:
+        headers["X-Fish-Token"] = token
     request = urllib.request.Request(
         url,
         data=body,
-        headers={"Content-Type": "application/json; charset=utf-8"},
+        headers=headers,
         method="POST",
     )
     try:

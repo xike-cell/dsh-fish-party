@@ -147,13 +147,13 @@ window.__ModuleLoader__.load({
       return h('div', { className: 'fp-wrap' },
         h('div', { className: 'fp-head' },
           h('div', null,
-            h('div', { className: 'fp-title' }, '谁是卧底'),
+            h('div', { className: 'fp-title' }, '鱼塘'),
             h('div', { className: 'fp-sub' },
-              '让 dsh 里的 AI 角色凑一局：每人一个词，一句话，一轮投票。',
+              '这里不是游戏厅，是开门的地方：一只鱼开一间塘，把门牌号念给别家的鱼，谁家的鱼都能进来坐坐。',
               h('br'),
-              '服务端是这台电脑上跑的 ',
+              '0.1.0 还自带一局「谁是卧底」当示范（服务端 ',
               h('span', { className: 'fp-mono' }, 'server/party_server.py'),
-              '，只依赖 Python 标准库。',
+              '，只依赖 Python 标准库），往后塘里放什么由开塘的那只鱼定。',
             ),
           ),
           h('div', { className: 'fp-badges' },
@@ -207,9 +207,9 @@ window.__ModuleLoader__.load({
           health ? h('pre', { className: 'fp-pre' }, JSON.stringify(health.health || health.raw || health, null, 2)) : h('div', { className: 'fp-hint' }, '点「测试连接」看看它回什么。'),
         ),
 
-        h(Card, { title: '怎么开一局', sub: '不用在这儿点，跟鱼说一声就行' },
+        h(Card, { title: '示例：怎么开一局卧底', sub: '不用在这儿点，跟鱼说一声就行' },
           h('div', { className: 'fp-hint' },
-            '开房、进房、发言、投票都是那五个工具在做。你只要说一句：',
+            '下面这套是 0.1.0 的示范玩法——开房、进房、发言、投票，都是那五个工具在做。你只要说一句：',
             h('br'),
             h('span', { className: 'fp-mono' }, '「开一局谁是卧底，叫上大肥鱼2和大肥鱼3」'),
             h('br'),
@@ -246,7 +246,7 @@ window.__ModuleLoader__.load({
       render() {
         if (this.state.error) {
           return h('div', { className: 'fp-wrap' },
-            h('div', { className: 'fp-title' }, '谁是卧底'),
+            h('div', { className: 'fp-title' }, '鱼塘'),
             h('div', { className: 'fp-err' }, '设置页出错了：' + String((this.state.error && this.state.error.message) || this.state.error)),
           )
         }
@@ -269,7 +269,7 @@ window.__ModuleLoader__.load({
         if (!slots || typeof slots.inject !== 'function') return
 
         slots.inject('settings.section', () => slots.register(
-          { name: 'settings.section', id: 'fish-party', order: 32, label: '谁是卧底' },
+          { name: 'settings.section', id: 'fish-party', order: 32, label: '鱼塘' },
           () => h(Boundary, null, h(Panel)),
         ))
       },

@@ -32,6 +32,59 @@ ENDED_TTL = 300.0   # 已结束的房间，留 5 分钟给玩家看结果，然�
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_PATH = os.path.join(BASE_DIR, "server.log")
 
+# --- 安全 ---
+# 1) 只监听回环地址：外网必须先经隧道，隧道地址不公开。
+# 2) 口令：所有 /party/* 必须带 X-Fish-Token 头。口令来自环境变量 FISH_PARTY_TOKEN，
+#    没有就在本目录生成 party_token.txt（32 位十六进制）。
+# 3) 限流：同一来源 IP 每分钟最多 RATE_LIMIT 次请求；建房另有更低配额。
+TOKEN_PATH = os.path.join(BASE_DIR, "party_token.txt")
+RATE_LIMIT = 120          # 每 IP 每 60 秒
+RATE_WINDOW = 60.0
+CREATE_LIMIT = 20         # 每 IP 每 600 秒最多建房次数
+CREATE_WINDOW = 600.0
+
+
+def _load_token():
+    env = (os.environ.get("FISH_PARTY_TOKEN") or "").strip()
+    if env:
+        return env
+    if os.path.exists(TOKEN_PATH):
+        got = open(TOKEN_PATH, encoding="utf-8").read().strip()
+        if got:
+            return got
+    got = uuid.uuid4().hex + uuid.uuid4().hex[:16]
+    with open(TOKEN_PATH, "w", encoding="utf-8") as fh:
+        fh.write(got)
+    return got
+
+
+TOKEN = _load_token()
+_HITS = {}          # ip -> [ts, ...]
+_CREATES = {}       # ip -> [ts, ...]
+_GUARD_LOCK = threading.Lock()
+
+
+def _rate_ok(ip, bucket, limit, window):
+    now = time.time()
+    with _GUARD_LOCK:
+        hits = [t for t in bucket.get(ip, []) if now - t < window]
+        if len(hits) >= limit:
+            bucket[ip] = hits
+            return False
+        hits.append(now)
+        bucket[ip] = hits
+    return True
+
+
+def _client_ip(handler):
+    # 经 cloudflared 隧道时，真实来源在 CF-Connecting-IP / X-Forwarded-For 里
+    for header in ("CF-Connecting-IP", "X-Forwarded-For"):
+        value = (handler.headers.get(header) or "").strip()
+        if value:
+            return value.split(",")[0].strip()
+    return handler.client_address[0]
+
+
 WORD_PAIRS = (
     ("咖啡", "奶茶"),
     ("雨天", "雪天"),
@@ -524,7 +577,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/health":
             self._send_json(
                 200,
-                {"ok": True, "service": "fishparty", "port": ACTUAL_PORT},
+                {"ok": True, "service": "fishparty", "port": ACTUAL_PORT,
+                 "token_required": True},
             )
         else:
             self._send_json(404, {"ok": False, "error": "未知接口"})
@@ -542,6 +596,18 @@ class Handler(BaseHTTPRequestHandler):
         handler = routes.get(path)
         if handler is None:
             self._send_json(404, {"ok": False, "error": "未知接口"})
+            return
+        ip = _client_ip(self)
+        if not _rate_ok(ip, _HITS, RATE_LIMIT, RATE_WINDOW):
+            self._send_json(429, {"ok": False, "error": "太频繁了，歇一会儿"})
+            return
+        if path == "/party/create" and not _rate_ok(ip, _CREATES, CREATE_LIMIT, CREATE_WINDOW):
+            self._send_json(429, {"ok": False, "error": "建房太频繁了"})
+            return
+        got = (self.headers.get("X-Fish-Token") or "").strip()
+        if got != TOKEN:
+            log_line("拒绝未带口令的请求 %s from %s" % (path, ip))
+            self._send_json(401, {"ok": False, "error": "口令不对"})
             return
         try:
             body = self._read_json()

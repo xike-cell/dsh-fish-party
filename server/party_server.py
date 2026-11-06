@@ -27,7 +27,7 @@ VOTE_TIMEOUT = 20.0
 TICK_INTERVAL = 0.5
 
 # 房间回收：房间只增不减会一直吃内存、拖慢每 0.5 秒的全量扫描。
-LOBBY_TTL = 600.0   # 大厅里没人开局的房间，闲置 10 分钟回收
+LOBBY_TTL = 1800.0  # 大厅里没人开局的房间，闲置 30 分钟回收（有人进房会重置这个倒计时）
 ENDED_TTL = 300.0   # 已结束的房间，留 5 分钟给玩家看结果，然后回收
 POST_TALK = 60.0    # 赛后可说话的时长（在这段时间里聊天、不计轮次、不投票）
 
@@ -81,10 +81,10 @@ def bili_lookup(uid):
 
 
 def _bili_bind(data):
-    """进房前必须先有一个能查到的 B 站号。"""
+    """B 站号改成选填：不填也能进（塘里人少，先把门开大），填了就必须能查到。"""
     raw = str(data.get("bili_uid") or "").strip()
     if not raw:
-        raise ApiError("要先绑定 B 站号：填一下你的 B 站 UID", 400)
+        return {"uid": 0, "name": ""}
     got = bili_lookup(raw)
     if not got:
         raise ApiError("这个 UID 查不到（或者 B 站暂时没响应），核对一下再试", 400)
@@ -486,13 +486,34 @@ def pond_info():
             "idle": int(now - room["phase_started"]),
         })
     rooms.sort(key=lambda r: (r["phase"] != "lobby", -r["players"]))
+    total_players = sum(r["players"] for r in rooms)
+    total_rooms = len(rooms)
     return {
         "ok": True,
         "host": POND_OWNER,
         "service": "fishparty",
         "version": "0.1.0",
         "rooms": rooms,
+        "total_players": total_players,
+        "total_rooms": total_rooms,
+        "online": total_players,
     }
+
+
+def _room_of(name, keep_code=None, bili_uid=None):
+    """这个人现在在哪间房。同名算同一只鱼；绑了同一个 B 站号的也算同一只鱼。"""
+    uid = int(bili_uid or 0)
+    for code, room in ROOMS.items():
+        if code == keep_code:
+            continue
+        for pl in room.get("players", []):
+            if not pl.get("alive", True):
+                continue
+            if pl.get("name") == name:
+                return code
+            if uid and int((pl.get("bili") or {}).get("uid") or 0) == uid:
+                return code
+    return None
 
 
 def api_create(data):
@@ -512,6 +533,9 @@ def api_create(data):
     if undercover_count < 1 or undercover_count >= max_players:
         raise ApiError("undercover_count 需大于 0 且小于 max_players")
 
+    old_room = _room_of(host, None, host_bili.get("uid"))
+    if old_room:
+        raise ApiError("你还在 %s 房间里，先退出那边再来" % old_room, 409)
     code = _new_room_code()
     pair = WORD_PAIRS[_rand_int(len(WORD_PAIRS))]
     if _rand_bit():
@@ -580,9 +604,15 @@ def api_join(data):
         raise ApiError("游戏已经开始，无法加入")
     if len(room["players"]) >= room["max_players"]:
         raise ApiError("房间已满")
+    old_room = _room_of(name, code, joiner_bili.get("uid"))
+    if old_room:
+        raise ApiError("你还在 %s 房间里，先退出那边再来" % old_room, 409)
+    uid_in = int((joiner_bili or {}).get("uid") or 0)
     for player in room["players"]:
         if player["name"] == name:
             raise ApiError("房间内已有同名玩家")
+        if uid_in and int((player.get("bili") or {}).get("uid") or 0) == uid_in:
+            raise ApiError("这个 B 站号已经在这间房了")
 
     index = len(room["players"])
     role = room["role_plan"][index]
@@ -590,6 +620,7 @@ def api_join(data):
     pid = str(uuid.uuid4())
     player = _make_player(pid, name, role, word, index, joiner_bili)
     room["players"].append(player)
+    room["phase_started"] = time.time()   # 有人进来就把"等开局"的倒计时重置
     room_event(room, "%s 已加入房间。" % name)
     _maybe_start(room)
     return {"player_id": pid, "role": role, "word": word}
@@ -809,6 +840,11 @@ def api_leave(data):
         raise ApiError("该玩家已经离场")
     player["alive"] = False
     room_event(room, "%s 离开房间（alive=false）。" % player["name"])
+    if room["phase"] == "lobby":
+        room["players"] = [pl for pl in room["players"] if pl.get("alive", True)]
+        if not room["players"]:
+            ROOMS.pop(room["room"], None)
+            return {"ok": True, "phase": "closed", "alive": False}
     if room["phase"] in ("speaking", "voting"):
         winner = _check_winner(room, None)
         if winner is not None:

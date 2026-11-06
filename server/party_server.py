@@ -94,6 +94,7 @@ def _bili_bind(data):
 WEB_ROUTE_MAP = {
     "/web/join": "join",
     "/web/state": "state",
+    "/web/watch": "watch",
     "/web/say": "say",
     "/web/vote": "vote",
 }
@@ -672,8 +673,7 @@ def api_match(data):
     return res
 
 
-def api_state(data):
-    room, player = _room_and_player(data)
+def _state_payload(room, player):
     players = [
         {
             "name": item["name"],
@@ -726,12 +726,29 @@ def api_state(data):
         "vote_left": round(vote_left, 1),
         "turn_name": turn_name,
         "chat": list(room.get("post_chat") or []),
-        "your_role_word": player["word"],
+        "your_role_word": (player or {}).get("word", ""),
         "last_speeches": speeches,
         "votes": dict(room["votes"]),
         "winner": room["winner"],
         "log": list(room["log"]),
     }
+
+
+def api_state(data):
+    room, player = _room_and_player(data)
+    return _state_payload(room, player)
+
+
+def api_watch(data):
+    """观战：房间已经开局（说话/投票中/结束后），不用座位也能看。"""
+    code = str(data.get("room") or "").strip()
+    room = ROOMS.get(code)
+    if not room:
+        raise ApiError("没有这间房", 404)
+    if room["phase"] == "lobby":
+        raise ApiError("这间房还没开局", 400)
+    room["last_active"] = time.time()
+    return _state_payload(room, None)
 
 
 def api_say(data):
@@ -1018,6 +1035,7 @@ class Handler(BaseHTTPRequestHandler):
             "/web/match": api_match,
             "/web/join": api_join,
             "/web/state": api_state,
+            "/web/watch": api_watch,
             "/web/say": api_say,
             "/web/vote": api_vote,
             "/web/again": api_again,

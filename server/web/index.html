@@ -262,12 +262,23 @@
       }
       box.innerHTML = rooms.map(function (r) {
         var full = r.players >= r.max;
+        var btn;
+        if (r.phase !== 'lobby') {
+          btn = '<button class="ghost" data-watch="' + esc(r.room) + '">观战</button>';
+        } else if (full) {
+          btn = '<button disabled>满员</button>';
+        } else {
+          btn = '<button data-join="' + esc(r.room) + '">进去</button>';
+        }
         return '<div class="room"><span class="code">' + esc(r.room) + '</span>' +
           '<span class="grow meta">' + phaseText(r.phase) + ' · ' + r.players + '/' + r.max + ' 人</span>' +
-          '<button data-join="' + esc(r.room) + '"' + (full || r.phase !== 'lobby' ? ' disabled' : '') + '>进去</button></div>';
+          btn + '</div>';
       }).join('');
       Array.prototype.forEach.call(box.querySelectorAll('button[data-join]'), function (b) {
         b.addEventListener('click', function () { join(b.getAttribute('data-join')); });
+      });
+      Array.prototype.forEach.call(box.querySelectorAll('button[data-watch]'), function (b) {
+        b.addEventListener('click', function () { watchRoom(b.getAttribute('data-watch')); });
       });
     }).catch(function () {
       $('rooms').innerHTML = '<div class="empty">问不到塘里——服务端可能关掉了。</div>';
@@ -308,7 +319,31 @@
     S.timer = setInterval(tick, 2000);
   }
 
+  function watchRoom(room) {
+    S.watching = true;
+    S.room = room;
+    S.pid = null;
+    post('/web/watch', { room: room }).then(function (d) {
+      show('view-room');
+      $('roomCode').textContent = room;
+      var sb = $('secretBox');
+      sb.textContent = '观战中 · 不占座位，看完随时走';
+      sb.classList.remove('hide');
+      render(d);
+      clearInterval(S.timer);
+      S.timer = setInterval(tick, 2000);
+    }).catch(function (e) { toast(e.message); });
+  }
+
   function tick() {
+    if (S.watching) {
+      if (!S.room) return;
+      post('/web/watch', { room: S.room }).then(render).catch(function () {
+        toast('这一局没了');
+        backToLobby();
+      });
+      return;
+    }
     if (!S.room || !S.pid) return;
     post('/web/state', { room: S.room, player_id: S.pid }).then(render).catch(function (e) {
       if (/不存在|没有这个人|离场/.test(e.message)) { toast('这一局没了'); backToLobby(); }
@@ -338,7 +373,7 @@
     S.last = d;
     $('phasePill').textContent = phaseText(d.phase) + (d.round ? ' · 第 ' + d.round + ' 轮' : '');
     $('phasePill').className = 'pill' + (d.phase === 'ended' ? '' : ' on');
-    $('myWord').textContent = d.your_role_word || '—';
+    $('myWord').textContent = S.watching ? '（观战中，看不到别人的词）' : (d.your_role_word || '—');
 
     var banner = $('banner');
     if (d.phase === 'ended') {
@@ -399,7 +434,7 @@
       ? '轮到你说了！· 汐禾的塘'
       : (speaking ? '有人在说 · 汐禾的塘' : '汐禾的塘');
     var postTalking = d.phase === 'ended' && (d.post_left || 0) > 0;
-    $('sayBox').classList.toggle('hide', !((speaking && meAlive && !meSaid) || postTalking));
+    $('sayBox').classList.toggle('hide', !!S.watching || !((speaking && meAlive && !meSaid) || postTalking));
     var sayInput = $('sayInput');
     if (postTalking) {
       sayInput.placeholder = '赛后闲话——说点什么，还剩 ' + Math.ceil(d.post_left) + ' 秒';
@@ -425,7 +460,11 @@
     var voting = d.phase === 'voting';
     var row = $('voteRow');
     var againRow = $('againRow');
-    if (d.phase === 'ended') {
+    if (S.watching) {
+      againRow.classList.remove('hide');
+      againRow.innerHTML = '<button id="btnStopWatch">退出观战</button>';
+      $('btnStopWatch').addEventListener('click', function () { backToLobby(); });
+    } else if (d.phase === 'ended') {
       againRow.classList.remove('hide');
       againRow.innerHTML =
         '<button class="primary" id="btnAgain">再来一局（还是这批人）</button>' +
@@ -464,7 +503,7 @@
   }
 
   function backToLobby() {
-    clearInterval(S.timer); S.timer = null; S.room = ''; S.pid = ''; save();
+    clearInterval(S.timer); S.timer = null; S.room = ''; S.pid = ''; S.watching = false; save();
     show('view-lobby'); loadPond();
   }
 

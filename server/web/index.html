@@ -18,11 +18,14 @@
       radial-gradient(1200px 700px at 15% -10%,rgba(110,168,255,.20),transparent 60%),
       radial-gradient(900px 600px at 90% 110%,rgba(142,230,255,.13),transparent 55%),
       linear-gradient(180deg,var(--bg1),var(--bg0) 65%);
-    min-height:100%;display:flex;justify-content:center;padding:32px 16px 56px;
+    min-height:100vh;display:flex;justify-content:center;align-items:center;padding:28px 16px 40px;
   }
   main{width:100%;max-width:680px;position:relative;z-index:1}
   h1{font-size:26px;margin:0 0 6px;font-weight:650;letter-spacing:.4px}
   .sub{color:var(--dim);font-size:13.5px;line-height:1.7;margin:0 0 22px}
+  .pondstat{display:inline-block;margin:-10px 0 20px;padding:6px 14px;border-radius:999px;
+    font-size:13px;color:#8ee6ff;background:rgba(142,230,255,.09);border:1px solid rgba(142,230,255,.28)}
+  .pondstat b{font-weight:600;color:#c8f4ff}
   .hide{display:none!important}
   .card{border:1px solid var(--line);border-radius:14px;background:var(--card);padding:16px 16px}
   .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
@@ -41,6 +44,7 @@
   button:hover:not(:disabled){background:rgba(127,127,127,.2)}
   button:disabled{opacity:.45;cursor:default}
   button.primary{border-color:rgba(110,168,255,.55);background:rgba(110,168,255,.18)}
+  button.ghost{border-style:dashed;color:var(--dim,#8b93a7);background:transparent}
   button.danger{border-color:rgba(255,123,123,.5);background:rgba(255,123,123,.12)}
   .rooms{display:flex;flex-direction:column;gap:10px}
   .room{display:flex;align-items:center;gap:14px;border:1px solid var(--line);border-radius:12px;
@@ -86,6 +90,7 @@
 <main>
   <h1>🫧 <span id="pondName">鱼塘</span></h1>
   <p class="sub">打开就能玩。填个名字，挑一间房进去——人齐了就开局。</p>
+  <div id="pondStat" class="pondstat">塘里现在没人</div>
 
   <!-- 入口 -->
   <section id="view-login">
@@ -94,11 +99,14 @@
         <input id="nameInput" type="text" maxlength="20" placeholder="你叫什么（20 字以内）" autocomplete="off">
       </div>
       <div class="row" style="margin-top:10px">
-        <input id="uidInput" type="text" maxlength="12" inputmode="numeric" placeholder="你的 B 站 UID（数字）" autocomplete="off">
+        <input id="uidInput" type="text" maxlength="12" inputmode="numeric" placeholder="B 站 UID（选填，可以不填）" autocomplete="off">
         <button class="primary" id="btnEnter">进来</button>
       </div>
-      <p class="meta" id="uidHint" style="margin:12px 0 0">进塘要绑 B 站号：填 UID，会替你把昵称查出来挂在这条鱼身上。</p>
+      <p class="meta" id="uidHint" style="margin:12px 0 0">B 站号可以不填。填了会替你把昵称查出来挂在这条鱼身上，别人一眼认得出；不填也能玩，只是光有个名字。</p>
       <p class="meta" style="margin:6px 0 0">这个名字是这局里别人叫你的名字；B 站号是别人在塘外认你的凭据。换了名字等于换了一条鱼。</p>
+      <div class="row" style="margin-top:14px">
+        <button class="ghost" id="btnGuest" style="flex:1">懒得想名字，随便给我一个</button>
+      </div>
     </div>
   </section>
 
@@ -188,7 +196,7 @@
 (function () {
   var $ = function (id) { return document.getElementById(id); };
   var LS = 'fishpond.v1';
-  var S = { name: '', room: '', pid: '', pass: '', private: false, biliUid: '', biliName: '', last: null, timer: null };
+  var S = { name: '', room: '', pid: '', pass: '', private: false, biliUid: '', biliName: '', last: null, timer: null, lobbyTimer: null };
 
   function save() {
     try { localStorage.setItem(LS, JSON.stringify({ name: S.name, room: S.room, pid: S.pid, pass: S.pass, priv: S.private, bu: S.biliUid, bn: S.biliName })); } catch (e) {}
@@ -213,6 +221,12 @@
     ['view-login', 'view-lobby', 'view-room'].forEach(function (v) {
       $(v).classList.toggle('hide', v !== which);
     });
+    if (S.lobbyTimer) { clearInterval(S.lobbyTimer); S.lobbyTimer = null; }
+    if (which === 'view-lobby') {
+      S.lobbyTimer = setInterval(function () {
+        if (!$('view-lobby').classList.contains('hide')) loadPond();
+      }, 3000);
+    }
   }
   function post(url, body) {
     return fetch(url, {
@@ -234,6 +248,13 @@
     fetch('/pond', { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (d) {
       if (d && d.host) $('pondName').textContent = d.host + ' 的塘';
       var rooms = (d && d.rooms) || [];
+      var stat = $('pondStat');
+      if (stat) {
+        var tp = (d && typeof d.total_players === 'number') ? d.total_players : rooms.reduce(function (n, r) { return n + (r.players || 0); }, 0);
+        var tr = (d && typeof d.total_rooms === 'number') ? d.total_rooms : rooms.length;
+        if (!tp) stat.innerHTML = '塘里现在没人，<b>你可以第一个</b>';
+        else stat.innerHTML = '塘里现在 <b>' + tp + '</b> 只鱼，开着 <b>' + tr + '</b> 间房';
+      }
       var box = $('rooms');
       if (!rooms.length) {
         box.innerHTML = '<div class="empty">塘里现在没有房。</div>';
@@ -420,14 +441,24 @@
     var v = $('nameInput').value.trim();
     var uid = $('uidInput').value.trim();
     if (!v) { toast('先填个名字'); return; }
-    if (!uid) { toast('还要填你的 B 站 UID'); $('uidInput').focus(); return; }
     var btn = $('btnEnter');
     btn.disabled = true;
+    if (!uid) {
+      S.name = v; S.biliUid = ''; S.biliName = ''; save();
+      show('view-lobby'); loadPond(); toast('进来了，玩得开心～');
+      btn.disabled = false;
+      return;
+    }
     bindUid(uid).then(function () {
       S.name = v; save(); show('view-lobby'); loadPond(); toast('已绑定 ' + S.biliName);
     }).catch(function (e) {
       toast(e.message); $('uidHint').textContent = e.message;
     }).then(function () { btn.disabled = false; });
+  });
+  $('btnGuest').addEventListener('click', function () {
+    var n = '路过的鱼' + Math.floor(1000 + Math.random() * 9000);
+    S.name = n; S.biliUid = ''; S.biliName = ''; save();
+    show('view-lobby'); loadPond(); toast('你是「' + n + '」，玩得开心～');
   });
   $('uidInput').addEventListener('keydown', function (e) { if (e.key === 'Enter') $('btnEnter').click(); });
   $('nameInput').addEventListener('keydown', function (e) { if (e.key === 'Enter') $('btnEnter').click(); });
@@ -480,6 +511,19 @@
 
   // ---- 启动 ----
   load();
+  // URL 参数直连（给 OBS 直播画面用）：?name=汐禾&uid=508633479&room=081436
+  var qp = {};
+  try {
+    location.search.replace(/^\?/, '').split('&').forEach(function (kv) {
+      if (!kv) return;
+      var i = kv.indexOf('=');
+      if (i < 0) { qp[kv] = ''; return; }
+      qp[decodeURIComponent(kv.slice(0, i))] = decodeURIComponent(kv.slice(i + 1));
+    });
+  } catch (e) {}
+  if (qp.name) { S.name = qp.name; $('nameInput').value = S.name; }
+  if (qp.uid) { S.biliUid = qp.uid; S.biliName = qp.bn || ''; }
+  if (qp.name && qp.uid && qp.room) { join(qp.room, qp.pass || ''); return; }
   if (S.name) {
     $('nameInput').value = S.name;
     if (S.room && S.pid) enterRoom();

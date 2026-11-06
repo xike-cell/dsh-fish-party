@@ -22,7 +22,7 @@ PREFERRED_PORT = 8770
 FALLBACK_PORT = 8771
 
 # 超时常量：按题目要求做成可配置常量，单位秒。
-SPEAK_TIMEOUT = 20.0
+SPEAK_TIMEOUT = 60.0
 VOTE_TIMEOUT = 20.0
 TICK_INTERVAL = 0.5
 
@@ -704,12 +704,27 @@ def api_state(data):
     post_left = 0.0
     if room["phase"] == "ended":
         post_left = max(0.0, POST_TALK - (time.time() - room.get("post_started", 0)))
+    # 这一轮还剩多久 / 现在该谁说话（前端据此响铃提醒，别让人干等着）
+    speak_left = 0.0
+    vote_left = 0.0
+    turn_name = ""
+    if room["phase"] == "speaking":
+        speak_left = max(0.0, SPEAK_TIMEOUT - (time.time() - room["phase_started"]))
+        for item in room["players"]:
+            if item["alive"] and not item["said"]:
+                turn_name = item["name"]
+                break
+    elif room["phase"] == "voting":
+        vote_left = max(0.0, VOTE_TIMEOUT - (time.time() - room["phase_started"]))
     return {
         "phase": room["phase"],
         "round": room["round"],
         "players": players,
         "reveal": reveal,
         "post_left": round(post_left, 1),
+        "speak_left": round(speak_left, 1),
+        "vote_left": round(vote_left, 1),
+        "turn_name": turn_name,
         "chat": list(room.get("post_chat") or []),
         "your_role_word": player["word"],
         "last_speeches": speeches,

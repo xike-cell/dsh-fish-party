@@ -315,6 +315,25 @@
     });
   }
 
+  // ---- 提醒音（浏览器要求先有一次点击，进过房就满足了） ----
+  var AC = null;
+  function beep(freq, dur) {
+    try {
+      AC = AC || new (window.AudioContext || window.webkitAudioContext)();
+      if (AC.state === 'suspended') AC.resume();
+      var o = AC.createOscillator();
+      var g = AC.createGain();
+      o.type = 'sine';
+      o.frequency.value = freq;
+      g.gain.setValueAtTime(0.14, AC.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.001, AC.currentTime + dur);
+      o.connect(g);
+      g.connect(AC.destination);
+      o.start();
+      o.stop(AC.currentTime + dur);
+    } catch (e) {}
+  }
+
   function render(d) {
     S.last = d;
     $('phasePill').textContent = phaseText(d.phase) + (d.round ? ' · 第 ' + d.round + ' 轮' : '');
@@ -329,6 +348,20 @@
     } else if (d.phase === 'lobby') {
       var n = d.players.length;
       banner.textContent = '还在等人：' + n + ' 个到了。人齐自动开局。';
+      banner.className = 'banner';
+    } else if (d.phase === 'speaking') {
+      var left = Math.ceil(d.speak_left || 0);
+      var mine = d.turn_name && d.turn_name === S.name;
+      if (mine) {
+        banner.textContent = '轮到你说，还剩 ' + left + ' 秒';
+      } else if (d.turn_name) {
+        banner.textContent = '等 ' + d.turn_name + ' 说（还剩 ' + left + ' 秒）';
+      } else {
+        banner.textContent = '大家都说完了，马上投票';
+      }
+      banner.className = 'banner' + (mine ? ' win' : '');
+    } else if (d.phase === 'voting') {
+      banner.textContent = '投票中，还剩 ' + Math.ceil(d.vote_left || 0) + ' 秒';
       banner.className = 'banner';
     } else {
       banner.className = 'banner hide';
@@ -354,6 +387,17 @@
     var speaking = d.phase === 'speaking';
     var meAlive = (d.players || []).some(function (p) { return p.name === me && p.alive; });
     var meSaid = (d.players || []).some(function (p) { return p.name === me && p.said; });
+
+    // ---- 提醒：轮到我说话 / 刚开局 / 刚进投票 ----
+    var myTurn = speaking && d.turn_name === me && !meSaid && meAlive;
+    if (myTurn && S.prevTurn !== me) { beep(880, 0.18); }
+    if (d.phase === 'speaking' && S.prevPhase && S.prevPhase !== 'speaking') { beep(620, 0.14); }
+    if (d.phase === 'voting' && S.prevPhase && S.prevPhase !== 'voting') { beep(520, 0.14); }
+    S.prevTurn = myTurn ? me : '';
+    S.prevPhase = d.phase;
+    document.title = myTurn
+      ? '轮到你说了！· 汐禾的塘'
+      : (speaking ? '有人在说 · 汐禾的塘' : '汐禾的塘');
     var postTalking = d.phase === 'ended' && (d.post_left || 0) > 0;
     $('sayBox').classList.toggle('hide', !((speaking && meAlive && !meSaid) || postTalking));
     var sayInput = $('sayInput');

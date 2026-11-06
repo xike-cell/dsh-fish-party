@@ -23,6 +23,7 @@ FALLBACK_PORT = 8771
 
 # 超时常量：按题目要求做成可配置常量，单位秒。
 SPEAK_TIMEOUT = 60.0
+
 VOTE_TIMEOUT = 20.0
 TICK_INTERVAL = 0.5
 
@@ -32,6 +33,10 @@ ENDED_TTL = 300.0   # 已结束的房间，留 5 分钟给玩家看结果，然�
 POST_TALK = 60.0    # 赛后可说话的时长（在这段时间里聊天、不计轮次、不投票）
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# 轮次事件：每换一个人说话/开局/进投票，往这个文件追加一行 JSON，并（可选）POST 到 webhook
+TURN_LOG = os.path.join(BASE_DIR, "turn_events.jsonl")
+TURN_WEBHOOK = (os.environ.get("FISH_TURN_WEBHOOK") or "").strip()
 LOG_PATH = os.path.join(BASE_DIR, "server.log")
 WEB_DIR = os.path.join(BASE_DIR, "web")
 
@@ -710,10 +715,7 @@ def _state_payload(room, player):
     turn_name = ""
     if room["phase"] == "speaking":
         speak_left = max(0.0, SPEAK_TIMEOUT - (time.time() - room["phase_started"]))
-        for item in room["players"]:
-            if item["alive"] and not item["said"]:
-                turn_name = item["name"]
-                break
+        turn_name = _turn_of(room)
     elif room["phase"] == "voting":
         vote_left = max(0.0, VOTE_TIMEOUT - (time.time() - room["phase_started"]))
     return {
@@ -923,6 +925,68 @@ def _evict_room(room, now):
         log_line("房间 %s 已结束 %.0f 秒，回收。" % (code, idle))
 
 
+_TURN_SEEN = {}
+_PHASE_SEEN = {}
+
+
+def _turn_of(room):
+    """现在轮到谁说话（没人了返回空串）。"""
+    if room.get("phase") != "speaking":
+        return ""
+    for item in room["players"]:
+        if item["alive"] and not item["said"]:
+            return item["name"]
+    return ""
+
+
+def _post_webhook(evt):
+    try:
+        body = json.dumps(evt, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request(TURN_WEBHOOK, data=body,
+                                     headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=3).read()
+    except Exception as exc:
+        log_line("webhook 投递失败：%r" % (exc,))
+
+
+def _emit(room, kind, name=""):
+    """写一行事件到 turn_events.jsonl；配了 FISH_TURN_WEBHOOK 就同时 POST 出去。"""
+    evt = {
+        "at": round(time.time(), 3),
+        "kind": kind,
+        "room": room.get("room", ""),
+        "phase": room.get("phase", ""),
+        "round": room.get("round", 0),
+        "name": name,
+        "speak_left": round(max(0.0, SPEAK_TIMEOUT - (time.time() - room["phase_started"])), 1)
+        if room.get("phase") == "speaking" else 0.0,
+    }
+    try:
+        with open(TURN_LOG, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(evt, ensure_ascii=False) + "\n")
+    except Exception as exc:
+        log_line("事件写入失败：%r" % (exc,))
+    if TURN_WEBHOOK:
+        threading.Thread(target=_post_webhook, args=(evt,), daemon=True).start()
+
+
+def _check_events(room):
+    """每秒看一次：阶段变了、换人说话了，就发事件。"""
+    code = room.get("room", "")
+    phase = room.get("phase", "")
+    prev_phase = _PHASE_SEEN.get(code)
+    if phase != prev_phase:
+        _PHASE_SEEN[code] = phase
+        if phase in ("speaking", "voting", "ended"):
+            _emit(room, "phase_" + phase)
+    cur = _turn_of(room)
+    prev_turn = _TURN_SEEN.get(code)
+    if cur != prev_turn:
+        _TURN_SEEN[code] = cur
+        if cur:
+            _emit(room, "your_turn", cur)
+
+
 def _timeout_loop():
     while True:
         time.sleep(TICK_INTERVAL)
@@ -931,6 +995,7 @@ def _timeout_loop():
             for room in list(ROOMS.values()):
                 try:
                     _sweep_room(room, now)
+                    _check_events(room)
                 except Exception as exc:
                     log_line("超时扫描异常：%r" % (exc,))
             for room in list(ROOMS.values()):
